@@ -1,9 +1,31 @@
-local config = require("avd.config")
-local ui = require("avd.ui")
-
+-- nvim-android-avd: Todo en un solo archivo
 local M = {}
 
--- === Detectar ANDROID_HOME (portable) ===
+-- === Configuración por defecto ===
+M.config = {
+	sdkmanager_cmd = "sdkmanager",
+	avdmanager_cmd = "avdmanager",
+	emulator_cmd = "emulator",
+	nohup_launch = true,
+}
+
+function M.setup(opts)
+	M.config = vim.tbl_deep_extend("force", M.config, opts or {})
+end
+
+-- === UI wrapper ===
+local function input(prompt, callback)
+	vim.ui.input({ prompt = prompt }, callback)
+end
+
+local function select(opts, prompt, format_item, callback)
+	vim.ui.select(opts, {
+		prompt = prompt,
+		format_item = format_item or tostring,
+	}, callback)
+end
+
+-- === Detectar ANDROID_HOME ===
 local function get_android_home()
 	local home = os.getenv("ANDROID_HOME")
 	if home and vim.uv.fs_stat(home) then
@@ -33,7 +55,7 @@ local function get_android_home()
 	return nil
 end
 
--- === Instalar skin desde repo si no existe ===
+-- === Instalar skin ===
 local function install_skin(skin_name)
 	local android_home = get_android_home()
 	if not android_home then
@@ -100,8 +122,10 @@ end
 
 -- === Listar AVDs ===
 function M.list_avds()
-	local handle = io.popen(config.avdmanager_cmd .. " list avd")
+	local cmd = M.config.avdmanager_cmd .. " list avd"
+	local handle = io.popen(cmd)
 	if not handle then
+		print("❌ Failed to run: " .. cmd)
 		return {}
 	end
 
@@ -119,9 +143,10 @@ function M.list_avds()
 	return avds
 end
 
--- === Listar imágenes instaladas ===
+-- === Listar imágenes ===
 function M.list_images()
-	local handle = io.popen(config.sdkmanager_cmd .. " --list_installed 2>/dev/null")
+	local cmd = M.config.sdkmanager_cmd .. " --list_installed 2>/dev/null"
+	local handle = io.popen(cmd)
 	if not handle then
 		return {}, {}
 	end
@@ -168,7 +193,8 @@ end
 
 -- === Listar dispositivos ===
 function M.list_devices()
-	local handle = io.popen(config.avdmanager_cmd .. " list device")
+	local cmd = M.config.avdmanager_cmd .. " list device"
+	local handle = io.popen(cmd)
 	if not handle then
 		return {}, {}
 	end
@@ -203,19 +229,18 @@ end
 
 -- === Crear AVD ===
 function M.create_avd()
-	ui.input("AVD Name: ", function(name)
+	input("AVD Name: ", function(name)
 		if not name or name == "" then
-			print("Cancelled.")
 			return
 		end
 
 		local images, display_options = M.list_images()
 		if not images or #images == 0 then
-			print("❌ No system images found. Install with sdkmanager.")
+			print("❌ No system images found.")
 			return
 		end
 
-		ui.select(display_options, "Select System Image:", nil, function(_, idx)
+		select(display_options, "Select System Image:", nil, function(_, idx)
 			if not idx then
 				return
 			end
@@ -227,7 +252,7 @@ function M.create_avd()
 				return
 			end
 
-			ui.select(devices, "Select Device:", nil, function(_, dev_idx)
+			select(devices, "Select Device:", nil, function(_, dev_idx)
 				if not dev_idx then
 					return
 				end
@@ -242,7 +267,7 @@ function M.create_avd()
 
 				local cmd = string.format(
 					"%s create avd -n '%s' -k '%s' -d '%s' --skin '%s'",
-					config.avdmanager_cmd,
+					M.config.avdmanager_cmd,
 					name,
 					image,
 					device_id,
@@ -253,7 +278,6 @@ function M.create_avd()
 				local success = os.execute(cmd)
 				if success == 0 then
 					print(string.format("✅ AVD '%s' created!", name))
-					print("▶️  Launch with :AVDLaunch")
 				else
 					print("❌ Failed to create AVD.")
 				end
@@ -270,7 +294,7 @@ function M.launch_avd()
 		return
 	end
 
-	ui.select(avds, "Launch AVD:", function(item)
+	select(avds, "Launch AVD:", function(item)
 		return "📱 " .. item
 	end, function(chosen)
 		if not chosen then
@@ -278,10 +302,10 @@ function M.launch_avd()
 		end
 
 		local cmd
-		if config.nohup_launch then
-			cmd = string.format("nohup %s -avd '%s' > /dev/null 2>&1 &", config.emulator_cmd, chosen)
+		if M.config.nohup_launch then
+			cmd = string.format("nohup %s -avd '%s' > /dev/null 2>&1 &", M.config.emulator_cmd, chosen)
 		else
-			cmd = string.format("%s -avd '%s'", config.emulator_cmd, chosen)
+			cmd = string.format("%s -avd '%s'", M.config.emulator_cmd, chosen)
 		end
 
 		print("🚀 Launching " .. chosen)
@@ -289,13 +313,13 @@ function M.launch_avd()
 	end)
 end
 
--- === Comandos de usuario ===
+-- === Comandos ===
 vim.api.nvim_create_user_command("AVDCreate", function()
 	M.create_avd()
-end, { desc = "Create a new Android Virtual Device" })
+end, { desc = "Create Android AVD" })
 
 vim.api.nvim_create_user_command("AVDLaunch", function()
 	M.launch_avd()
-end, { desc = "Launch an existing Android Virtual Device" })
+end, { desc = "Launch Android AVD" })
 
 return M
