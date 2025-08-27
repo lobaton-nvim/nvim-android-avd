@@ -1,7 +1,7 @@
--- nvim-android-avd: Todo en un solo archivo
+-- nvim-android-avd: Caché persistente hasta cambio
 local M = {}
 
--- === Configuración por defecto ===
+-- === Configuración ===
 M.config = {
 	sdkmanager_cmd = "sdkmanager",
 	avdmanager_cmd = "avdmanager",
@@ -23,6 +23,40 @@ local function select(opts, prompt, format_item, callback)
 		prompt = prompt,
 		format_item = format_item or tostring,
 	}, callback)
+end
+
+-- === Caché persistente (sin TTL) ===
+local cache = {
+	avds = nil,
+	images = nil,
+	devices = nil,
+	display_options = nil,
+	device_ids = nil,
+}
+
+-- === Invalidar caché específica ===
+local function invalidate(key)
+	cache[key] = nil
+end
+
+function M.clear_cache(which)
+	if which == "avds" or not which then
+		cache.avds = nil
+		print("✅ Cache: AVDs cleared")
+	end
+	if which == "images" or not which then
+		cache.images = nil
+		cache.display_options = nil
+		print("✅ Cache: Images cleared")
+	end
+	if which == "devices" or not which then
+		cache.devices = nil
+		cache.device_ids = nil
+		print("✅ Cache: Devices cleared")
+	end
+	if not which then
+		print("✅ All caches cleared.")
+	end
 end
 
 -- === Detectar ANDROID_HOME ===
@@ -120,8 +154,12 @@ local function install_skin(skin_name)
 	return true
 end
 
--- === Listar AVDs ===
+-- === Listar AVDs (caché persistente) ===
 function M.list_avds()
+	if cache.avds then
+		return cache.avds
+	end
+
 	local cmd = M.config.avdmanager_cmd .. " list avd"
 	local handle = io.popen(cmd)
 	if not handle then
@@ -140,11 +178,16 @@ function M.list_avds()
 		end
 	end
 
+	cache.avds = avds
 	return avds
 end
 
--- === Listar imágenes ===
+-- === Listar imágenes (caché persistente) ===
 function M.list_images()
+	if cache.images then
+		return cache.images, cache.display_options
+	end
+
 	local cmd = M.config.sdkmanager_cmd .. " --list_installed 2>/dev/null"
 	local handle = io.popen(cmd)
 	if not handle then
@@ -188,11 +231,17 @@ function M.list_images()
 		end
 	end
 
+	cache.images = images
+	cache.display_options = display_options
 	return images, display_options
 end
 
--- === Listar dispositivos ===
+-- === Listar dispositivos (caché persistente) ===
 function M.list_devices()
+	if cache.devices then
+		return cache.devices, cache.device_ids
+	end
+
 	local cmd = M.config.avdmanager_cmd .. " list device"
 	local handle = io.popen(cmd)
 	if not handle then
@@ -224,10 +273,12 @@ function M.list_devices()
 		end
 	end
 
+	cache.devices = devices
+	cache.device_ids = device_ids
 	return devices, device_ids
 end
 
--- === Crear AVD ===
+-- === Crear AVD → invalida solo AVDs ===
 function M.create_avd()
 	input("AVD Name: ", function(name)
 		if not name or name == "" then
@@ -240,17 +291,17 @@ function M.create_avd()
 			return
 		end
 
+		local devices, device_ids = M.list_devices()
+		if not devices or #devices == 0 then
+			print("❌ No device definitions found.")
+			return
+		end
+
 		select(display_options, "Select System Image:", nil, function(_, idx)
 			if not idx then
 				return
 			end
 			local image = images[idx]
-
-			local devices, device_ids = M.list_devices()
-			if not devices or #devices == 0 then
-				print("❌ No device definitions found.")
-				return
-			end
 
 			select(devices, "Select Device:", nil, function(_, dev_idx)
 				if not dev_idx then
@@ -278,6 +329,8 @@ function M.create_avd()
 				local success = os.execute(cmd)
 				if success == 0 then
 					print(string.format("✅ AVD '%s' created!", name))
+					-- ✅ Solo invalidamos la lista de AVDs
+					invalidate("avds")
 				else
 					print("❌ Failed to create AVD.")
 				end
@@ -321,5 +374,16 @@ end, { desc = "Create Android AVD" })
 vim.api.nvim_create_user_command("AVDLaunch", function()
 	M.launch_avd()
 end, { desc = "Launch Android AVD" })
+
+vim.api.nvim_create_user_command("AVDClearCache", function(opts)
+	local which = opts.args == "" and nil or opts.args
+	M.clear_cache(which)
+end, {
+	desc = "Clear AVD cache: avds, images, devices, or all",
+	nargs = "?",
+	complete = function()
+		return { "avds", "images", "devices", "all" }
+	end,
+})
 
 return M
