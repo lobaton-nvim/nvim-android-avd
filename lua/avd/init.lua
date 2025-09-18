@@ -1,12 +1,16 @@
 -- nvim-android-avd: Caché persistente hasta cambio
+-- ✅ Modificado solo para compatibilidad multiplataforma (Windows/macOS/Linux)
 local M = {}
+
+-- Detectar sistema operativo
+local is_windows = vim.loop.os_uname().sysname:find("Windows")
 
 -- === Configuración ===
 M.config = {
-	sdkmanager_cmd = "sdkmanager",
-	avdmanager_cmd = "avdmanager",
-	emulator_cmd = "emulator",
-	nohup_launch = true,
+	sdkmanager_cmd = is_windows and "sdkmanager.bat" or "sdkmanager",
+	avdmanager_cmd = is_windows and "avdmanager.bat" or "avdmanager",
+	emulator_cmd = is_windows and "emulator.exe" or "emulator",
+	nohup_launch = not is_windows, -- nohup solo en Unix
 }
 
 function M.setup(opts)
@@ -79,8 +83,7 @@ local function get_android_home()
 
 	local local_app_data = os.getenv("LOCALAPPDATA")
 	if local_app_data then
-		local windows_path = local_app_data .. "\\Android\\Sdk"
-		windows_path = windows_path:gsub("\\", "/")
+		local windows_path = vim.fn.fnamemodify(local_app_data .. "\\Android\\Sdk", ":p")
 		if vim.uv.fs_stat(windows_path) then
 			return windows_path
 		end
@@ -103,7 +106,13 @@ local function install_skin(skin_name)
 
 	if not vim.uv.fs_stat(skins_dir) then
 		print("📁 Creating skins directory: " .. skins_dir)
-		local ok = os.execute("mkdir -p " .. skins_dir)
+		local cmd
+		if is_windows then
+			cmd = 'cmd /c mkdir "' .. skins_dir:gsub("/", "\\") .. '"'
+		else
+			cmd = "mkdir -p " .. skins_dir
+		end
+		local ok = os.execute(cmd)
 		if not ok then
 			print("❌ Failed to create: " .. skins_dir)
 			return false
@@ -119,36 +128,51 @@ local function install_skin(skin_name)
 
 	local temp_dir = vim.loop.os_tmpdir() .. "/android-skins-" .. vim.fn.strftime("%s")
 
-	local clone_cmd =
-		string.format("git clone --depth=1 https://github.com/lobaton-nvim/android-skins.git %s", temp_dir)
+	local clone_cmd
+	if is_windows then
+		clone_cmd = 'cmd /c git clone --depth=1 https://github.com/lobaton-nvim/android-skins.git   "'
+			.. temp_dir:gsub("/", "\\")
+			.. '"'
+	else
+		clone_cmd =
+			string.format("git clone --depth=1 https://github.com/lobaton-nvim/android-skins.git   %s", temp_dir)
+	end
+
 	local success = os.execute(clone_cmd)
 	if not success then
-		print("❌ Failed to clone https://github.com/lobaton-nvim/android-skins.git")
-		os.execute("rm -rf " .. temp_dir)
+		print("❌ Failed to clone https://github.com/lobaton-nvim/android-skins.git  ")
+		os.execute(is_windows and 'cmd /c rmdir /s /q "' .. temp_dir:gsub("/", "\\") .. '"' or "rm -rf " .. temp_dir)
 		return false
 	end
 
 	local src_skin = temp_dir .. "/" .. skin_name
 	if not vim.uv.fs_stat(src_skin) then
 		print("❌ Skin not found in repo: " .. skin_name)
-		os.execute("rm -rf " .. temp_dir)
+		os.execute(is_windows and 'cmd /c rmdir /s /q "' .. temp_dir:gsub("/", "\\") .. '"' or "rm -rf " .. temp_dir)
 		return false
 	end
 
-	local copy_cmd = string.format("cp -r %s %s/", src_skin, skins_dir)
+	local copy_cmd
+	if is_windows then
+		copy_cmd =
+			string.format('cmd /c xcopy /E /I /Y "%s" "%s\\"', src_skin:gsub("/", "\\"), skins_dir:gsub("/", "\\"))
+	else
+		copy_cmd = string.format("cp -r %s %s/", src_skin, skins_dir)
+	end
+
 	success = os.execute(copy_cmd)
 	if not success then
 		print("❌ Failed to copy skin.")
-		os.execute("rm -rf " .. temp_dir)
+		os.execute(is_windows and 'cmd /c rmdir /s /q "' .. temp_dir:gsub("/", "\\") .. '"' or "rm -rf " .. temp_dir)
 		return false
 	end
 
 	local git_dir = skin_path .. "/.git"
 	if vim.uv.fs_stat(git_dir) then
-		os.execute("rm -rf " .. git_dir)
+		os.execute(is_windows and 'cmd /c rmdir /s /q "' .. git_dir:gsub("/", "\\") .. '"' or "rm -rf " .. git_dir)
 	end
 
-	os.execute("rm -rf " .. temp_dir)
+	os.execute(is_windows and 'cmd /c rmdir /s /q "' .. temp_dir:gsub("/", "\\") .. '"' or "rm -rf " .. temp_dir)
 
 	print("✅ Skin '" .. skin_name .. "' installed in " .. skin_path)
 	return true
@@ -329,7 +353,6 @@ function M.create_avd()
 				local success = os.execute(cmd)
 				if success == 0 then
 					print(string.format("✅ AVD '%s' created!", name))
-					-- ✅ Solo invalidamos la lista de AVDs
 					invalidate("avds")
 				else
 					print("❌ Failed to create AVD.")
@@ -358,7 +381,12 @@ function M.launch_avd()
 		if M.config.nohup_launch then
 			cmd = string.format("nohup %s -avd '%s' > /dev/null 2>&1 &", M.config.emulator_cmd, chosen)
 		else
-			cmd = string.format("%s -avd '%s'", M.config.emulator_cmd, chosen)
+			-- Windows: usar start /B
+			if is_windows then
+				cmd = string.format('start /B %s -avd "%s"', M.config.emulator_cmd, chosen)
+			else
+				cmd = string.format("%s -avd '%s'", M.config.emulator_cmd, chosen)
+			end
 		end
 
 		print("🚀 Launching " .. chosen)
